@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+</head>
+<body>
+    <h1>Teste connect</h1>
+</body>
+<script>
+    const ws = new WebSocket('ws://niarodev.com.br:55619?channelCode=fire1');
+
+    ws.onopen = () => {
+        console.log('Connected');
+
+        ws.send(JSON.stringify({
+            type: "TARGET_POSITION",
+            payload: {
+                x: 200,
+                y: 150,
+                side: "right"
+            }
+        }));
+    };
+
+    ws.onmessage = (event) => {
+        console.log('Received:', JSON.parse(event.data));
+    };
+
+    ws.onclose = () => {
+        console.log('Disconnected');
+    };
+
+    ws.onerror = (err) => {
+        console.error('Error:', err);
+    };
+</script>
+</html>
