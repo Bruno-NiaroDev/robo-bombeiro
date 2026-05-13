@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bimo - Centro de controle</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: Arial;
+        }
+
+        body {
+            background: #0f172a;
+            color: white;
+            padding: 30px;
+        }
+
+        h1 {
+            margin-bottom: 20px;
+            font-size: 32px;
+        }
+
+        .container {
+            display: grid;
+            grid-template-columns: 350px 1fr;
+            gap: 20px;
+        }
+
+        .card {
+            background: #111827;
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.3);
+        }
+
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: red;
+        }
+
+        .connected {
+            background: #22c55e;
+        }
+
+        input {
+            width: 100%;
+            padding: 14px;
+            border: none;
+            border-radius: 10px;
+            background: #1f2937;
+            color: white;
+            margin-bottom: 15px;
+            font-size: 16px;
+        }
+
+        button {
+            width: 100%;
+            padding: 14px;
+            border: none;
+            border-radius: 10px;
+            background: #2563eb;
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+
+        button:hover {
+            background: #1d4ed8;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th {
+            background: #1e293b;
+            text-align: left;
+            padding: 15px;
+        }
+
+        td {
+            padding: 12px 15px;
+            border-bottom: 1px solid #1f2937;
+            font-size: 14px;
+        }
+
+        tr:hover {
+            background: #1e293b;
+        }
+
+        .logs {
+            margin-top: 20px;
+            max-height: 250px;
+            overflow: auto;
+            background: #0b1220;
+            border-radius: 10px;
+            padding: 10px;
+            font-size: 13px;
+        }
+
+        .log {
+            margin-bottom: 8px;
+            color: #94a3b8;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>🤖 Bimo - Central de controle</h1>
+    <div class="container">
+        <div class="card">
+            <div class="status">
+                <div class="dot" id="statusDot"></div>
+                <span id="statusText">Desconectado</span>
+            </div>
+            <h3 style="margin-bottom:15px;">Enviar Coordenadas</h3>
+            <input type="number" id="x" placeholder="Posição X" />
+            <input type="number" id="y" placeholder="Posição Y" />
+            <button onclick="sendTarget()">
+                ENVIAR TARGET
+            </button>
+            <div class="logs" id="logs"></div>
+        </div>
+        <div class="card">
+            <h3 style="margin-bottom:20px;">Mensagens Recebidas</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Tipo</th>
+                        <th>Payload</th>
+                        <th>Horário</th>
+                    </tr>
+                </thead>
+                <tbody id="tableBody"></tbody>
+            </table>
+        </div>
+    </div>
+    <script>
+        const ws = new WebSocket("ws://niarodev.com.br:55619?channelCode=fire1");
+
+        const statusDot = document.getElementById("statusDot");
+        const statusText = document.getElementById("statusText");
+        const tableBody = document.getElementById("tableBody");
+        const logs = document.getElementById("logs");
+
+        function addLog(text) {
+            const div = document.createElement("div");
+            div.className = "log";
+            div.innerText = text;
+            logs.prepend(div);
+        }
+
+        ws.onopen = () => {
+            statusDot.classList.add("connected");
+            statusText.innerText = "Connected";
+            addLog("✅ WebSocket conectado");
+        };
+
+        ws.onclose = () => {
+            statusDot.classList.remove("connected");
+            statusText.innerText = "Disconnected";
+            addLog("❌ WebSocket desconectado");
+        };
+
+        ws.onmessage = (event) => {
+            try {
+                const msg = JSON.parse(event.data);
+                addLog("📥 " + JSON.stringify(msg));
+                const row = document.createElement("tr");
+                row.innerHTML = `
+                    <td>${msg.type || "-"}</td>
+                    <td>${JSON.stringify(msg.payload)}</td>
+                    <td>${new Date().toLocaleTimeString()}</td>
+                `;
+                tableBody.prepend(row);
+            } catch (err) {
+                addLog("RAW: " + event.data);
+            }
+        };
+
+        function sendTarget() {
+            const x = Number(document.getElementById("x").value);
+            const y = Number(document.getElementById("y").value);
+            const message = {
+                type: "TARGET_POSITION",
+                payload: {x,y}
+            };
+
+            ws.send(JSON.stringify(message));
+            addLog("📤 Enviado: " + JSON.stringify(message));
+        }
+    </script>
+</body>
+
+</html>
