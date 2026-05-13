@@ -7,7 +7,7 @@
 
 namespace {
 
-const navigation::Coordinate kFirePosition = {4, 4};
+const navigation::Coordinate kFirePosition = {3, 3};
 const navigation::Coordinate kDynamicObstacle = {2, 0};
 
 void printCoordinate(const navigation::Coordinate& coordinate) {
@@ -30,7 +30,7 @@ void printPath(const std::vector<navigation::Coordinate>& path) {
 }
 
 void printGrid(const navigation::GridMap& gridMap, const navigation::Coordinate& robotPosition) {
-    std::cout << "\nGrid 5x5\n";
+    std::cout << "\nGrid 4x4\n";
 
     for (uint8_t y = 0; y < navigation::GridMap::Height; ++y) {
         for (uint8_t x = 0; x < navigation::GridMap::Width; ++x) {

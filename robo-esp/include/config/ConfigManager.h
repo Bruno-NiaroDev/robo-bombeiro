@@ -5,8 +5,8 @@
 namespace config {
 
 struct RobotConfig {
-    uint8_t gridWidth = 5;
-    uint8_t gridHeight = 5;
+    uint8_t gridWidth = 4;
+    uint8_t gridHeight = 4;
     uint8_t startX = 0;
     uint8_t startY = 0;
 };

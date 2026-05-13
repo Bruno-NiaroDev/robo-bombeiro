@@ -11,8 +11,8 @@ struct GridCell {
 
 class GridMap {
 public:
-    static const uint8_t Width = 5;
-    static const uint8_t Height = 5;
+    static const uint8_t Width = 4;
+    static const uint8_t Height = 4;
     static const GridCell Home;
 
     void begin();
