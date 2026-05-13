@@ -41,9 +41,9 @@ namespace sensors {
 /// Servo motor pin assignments.
 namespace servo {
     /// Horizontal servo control.
-    constexpr int HORIZONTAL = 18;
+    constexpr int HORIZONTAL = 19;
     /// Vertical servo control.
-    constexpr int VERTICAL = 19;
+    constexpr int VERTICAL = 18;
 }
 
 /// Pump relay control pin.
