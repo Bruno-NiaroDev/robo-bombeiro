@@ -28,12 +28,15 @@ void FireScanner::begin() {
     _fireDetected = false;
     _hasNewData = false;
     _fireDirection = FireDirection::None;
+    _sweepEnabled = false;
 
     writeServoAngle(_currentAngle);
 }
 
 void FireScanner::update(unsigned long currentMillis) {
-    updateSweep(currentMillis);
+    if (_sweepEnabled) {
+        updateSweep(currentMillis);
+    }
     updateFireReading();
 }
 
@@ -98,6 +101,14 @@ void FireScanner::setServoPulseRange(uint16_t minPulseMicros, uint16_t maxPulseM
         _maxPulseMicros = maxPulseMicros;
         writeServoAngle(_currentAngle);
     }
+}
+
+void FireScanner::enableSweep(bool enabled) {
+    _sweepEnabled = enabled;
+}
+
+bool FireScanner::sweepEnabled() const {
+    return _sweepEnabled;
 }
 
 void FireScanner::updateSweep(unsigned long currentMillis) {

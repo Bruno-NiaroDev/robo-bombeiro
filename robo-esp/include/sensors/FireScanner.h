@@ -34,7 +34,8 @@ public:
     void setStepDegrees(uint8_t stepDegrees);
     void setSensorActiveLow(bool activeLow);
     void setServoPulseRange(uint16_t minPulseMicros, uint16_t maxPulseMicros);
-
+    void enableSweep(bool enabled);
+    bool sweepEnabled() const;
 private:
     void updateSweep(unsigned long currentMillis);
     void updateFireReading();
@@ -60,6 +61,7 @@ private:
     bool _sensorActiveLow = true;
     bool _fireDetected = false;
     bool _hasNewData = false;
+    bool _sweepEnabled = false;
     FireDirection _fireDirection = FireDirection::None;
 };
 
