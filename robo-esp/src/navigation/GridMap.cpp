@@ -90,11 +90,8 @@ void GridMap::resetDynamicObstacles() {
 void GridMap::loadFixedBlockedCells() {
     _fixedBlocked[1][1] = true;
     _fixedBlocked[2][1] = true;
-    _fixedBlocked[3][1] = true;
-
-    _fixedBlocked[1][3] = true;
-    _fixedBlocked[2][3] = true;
-    _fixedBlocked[3][3] = true;
+    _fixedBlocked[2][1] = true;
+    _fixedBlocked[2][2] = true;
 }
 
 void GridMap::clear(bool cells[Height][Width]) {
