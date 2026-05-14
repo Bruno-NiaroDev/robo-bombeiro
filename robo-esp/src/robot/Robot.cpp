@@ -6,12 +6,14 @@ namespace robot {
 
 void Robot::begin() {
     _navigation.begin();
+    _fireScanner.begin();
     _state = RobotState();
     _state.mode = RobotMode::Autonomous;
     transitionTo(AutonomousState::IDLE, 0);
 }
 
 void Robot::update(unsigned long currentMillis) {
+    _fireScanner.update(currentMillis);
     _navigation.update(currentMillis);
 
     switch (_state.autonomousState) {
@@ -56,10 +58,10 @@ bool Robot::setTarget(uint8_t x, uint8_t y) {
     if (!_navigation.gridMap().isCellFree(x, y)) {
         char error[128];
         snprintf(error, sizeof(error), "Invalid target: destination blocked (%u,%u) fixed=%s dynamic=%s",
-                 x,
-                 y,
-                 _navigation.gridMap().isFixedBlocked(x, y) ? "true" : "false",
-                 _navigation.gridMap().hasDynamicObstacle(x, y) ? "true" : "false");
+            x,
+            y,
+            _navigation.gridMap().isFixedBlocked(x, y) ? "true" : "false",
+            _navigation.gridMap().hasDynamicObstacle(x, y) ? "true" : "false");
         enterError(error);
         return false;
     }
@@ -82,7 +84,7 @@ bool Robot::setTarget(uint8_t x, uint8_t y) {
     setLastError("");
     Serial.println("GRID AFTER TARGET RECEIVED");
     _navigation.gridMap().debugPrintGrid(_state.x, _state.y, _state.targetX, _state.targetY, _state.hasTarget);
-    transitionTo(AutonomousState::RECEIVING_TARGET, _stateStartedAt);
+    transitionTo(AutonomousState::RECEIVING_TARGET, _stateStartedAt );
     return true;
 }
 
@@ -218,6 +220,10 @@ void Robot::handleMoving(unsigned long currentMillis) {
     }
 
     if (reachedTarget()) {
+        Serial.println("TARGET REACHED: starting fire scan");
+
+        _fireScanner.enableSweep(true);
+
         transitionTo(AutonomousState::SEARCHING_FIRE, currentMillis);
     }
 }
@@ -246,7 +252,18 @@ void Robot::handleAvoidingObstacle(unsigned long currentMillis) {
 }
 
 void Robot::handleSearchingFire(unsigned long currentMillis) {
-    if (_state.fireDetected) {
+    if (_fireScanner.fireDetected()) {
+        _fireScanner.enableSweep(false);
+        _state.fireDetected = true;
+
+        Serial.printf(
+            "FIRE DETECTED: angle=%u direction=%d\n",
+            _fireScanner.fireAngle(),
+            static_cast<int>(
+                _fireScanner.fireDirection()
+            )
+        );
+
         transitionTo(AutonomousState::EXTINGUISHING_FIRE, currentMillis);
     }
 }
@@ -255,6 +272,8 @@ void Robot::handleExtinguishingFire(unsigned long currentMillis) {
     if (!_extinguishingComplete) {
         return;
     }
+
+    _fireScanner.enableSweep(false);
 
     _state.returningHome = true;
     _state.fireDetected = false;
