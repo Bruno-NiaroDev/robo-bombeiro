@@ -6,14 +6,12 @@ namespace robot {
 
 void Robot::begin() {
     _navigation.begin();
-    _fireScanner.begin();
     _state = RobotState();
     _state.mode = RobotMode::Autonomous;
     transitionTo(AutonomousState::IDLE, 0);
 }
 
 void Robot::update(unsigned long currentMillis) {
-    _fireScanner.update(currentMillis);
     _navigation.update(currentMillis);
 
     switch (_state.autonomousState) {
@@ -131,6 +129,34 @@ void Robot::notifyFireDetected(bool detected) {
     _state.fireDetected = detected;
 }
 
+void Robot::notifyFireConfirmed(unsigned long currentMillis) {
+    if (_state.autonomousState != AutonomousState::MOVING &&
+        _state.autonomousState != AutonomousState::SEARCHING_FIRE) {
+        return;
+    }
+
+    Serial.println("FIRE CONFIRMED: activating pump");
+    _state.fireDetected = true;
+    _state.routeReady = false;
+    transitionTo(AutonomousState::EXTINGUISHING_FIRE, currentMillis);
+}
+
+void Robot::notifyFireSearchTimedOut() {
+    if (_state.autonomousState != AutonomousState::SEARCHING_FIRE) {
+        return;
+    }
+
+    Serial.println("FIRE SEARCH TIMEOUT: preparing reverse return");
+    _state.returningHome = true;
+    _state.fireDetected = false;
+    _state.targetX = navigation::GridMap::Home.x;
+    _state.targetY = navigation::GridMap::Home.y;
+    _state.hasTarget = true;
+    _state.routeReady = false;
+    prepareReverseReturnRoute();
+    transitionTo(AutonomousState::RETURNING_HOME, _stateStartedAt);
+}
+
 void Robot::notifyExtinguishingComplete() {
     _extinguishingComplete = true;
 }
@@ -160,6 +186,13 @@ AutonomousState Robot::autonomousState() const {
 
 bool Robot::hasNextWaypoint() const {
     const auto& path = _navigation.currentPath();
+    if (_state.returningHome) {
+        return _state.routeReady &&
+               !path.empty() &&
+               !reachedHome() &&
+               _pathIndex < path.size();
+    }
+
     return _pathIndex < path.size();
 }
 
@@ -222,8 +255,6 @@ void Robot::handleMoving(unsigned long currentMillis) {
     if (reachedTarget()) {
         Serial.println("TARGET REACHED: starting fire scan");
 
-        _fireScanner.enableSweep(true);
-
         transitionTo(AutonomousState::SEARCHING_FIRE, currentMillis);
     }
 }
@@ -245,6 +276,14 @@ void Robot::handleAvoidingObstacle(unsigned long currentMillis) {
     _navigation.gridMap().debugPrintGrid(_state.x, _state.y, _state.targetX, _state.targetY, _state.hasTarget);
 
     if (_state.returningHome) {
+        _state.routeReady = false;
+        _routeRecalculationPending = true;
+
+        if (!calculateRouteTo(navigation::GridMap::Home.x, navigation::GridMap::Home.y)) {
+            enterError(_state.lastError);
+            return;
+        }
+
         transitionTo(AutonomousState::RETURNING_HOME, currentMillis);
     } else {
         transitionTo(AutonomousState::CALCULATING_ROUTE, currentMillis);
@@ -252,17 +291,8 @@ void Robot::handleAvoidingObstacle(unsigned long currentMillis) {
 }
 
 void Robot::handleSearchingFire(unsigned long currentMillis) {
-    if (_fireScanner.fireDetected()) {
-        _fireScanner.enableSweep(false);
-        _state.fireDetected = true;
-
-        Serial.printf(
-            "FIRE DETECTED: angle=%u direction=%d\n",
-            _fireScanner.fireAngle(),
-            static_cast<int>(
-                _fireScanner.fireDirection()
-            )
-        );
+    if (_state.fireDetected) {
+        Serial.println("FIRE CONFIRMED: activating pump");
 
         transitionTo(AutonomousState::EXTINGUISHING_FIRE, currentMillis);
     }
@@ -273,8 +303,6 @@ void Robot::handleExtinguishingFire(unsigned long currentMillis) {
         return;
     }
 
-    _fireScanner.enableSweep(false);
-
     _state.returningHome = true;
     _state.fireDetected = false;
     _state.targetX = navigation::GridMap::Home.x;
@@ -282,6 +310,7 @@ void Robot::handleExtinguishingFire(unsigned long currentMillis) {
     _state.hasTarget = true;
     _state.routeReady = false;
     _extinguishingComplete = false;
+    prepareReverseReturnRoute();
     transitionTo(AutonomousState::RETURNING_HOME, currentMillis);
 }
 
@@ -291,16 +320,16 @@ void Robot::handleReturningHome(unsigned long currentMillis) {
         return;
     }
 
-    if (!_state.routeReady && !calculateRouteTo(navigation::GridMap::Home.x, navigation::GridMap::Home.y)) {
-        enterError(_state.lastError);
-        return;
-    }
-
     if (reachedHome()) {
         _state.hasTarget = false;
         _state.returningHome = false;
         _state.routeReady = false;
         transitionTo(AutonomousState::IDLE, currentMillis);
+        return;
+    }
+
+    if (!_state.routeReady) {
+        enterError(_state.lastError[0] != '\0' ? _state.lastError : "Reverse return route is not ready");
     }
 }
 
@@ -384,8 +413,63 @@ bool Robot::reachedHome() const {
     return _state.x == navigation::GridMap::Home.x && _state.y == navigation::GridMap::Home.y;
 }
 
+void Robot::prepareReverseReturnRoute() {
+    const auto& path = _navigation.currentPath();
+
+    if (reachedHome()) {
+        _state.routeReady = false;
+        _pathIndex = 0;
+        return;
+    }
+
+    if (path.size() < 2) {
+        _state.routeReady = false;
+        _pathIndex = 0;
+        setLastError("Reverse return failed: current route is too short");
+        Serial.println(_state.lastError);
+        return;
+    }
+
+    uint8_t currentIndex = 0;
+    bool foundCurrentPosition = false;
+
+    for (uint8_t i = 0; i < path.size(); ++i) {
+        if (path[i].x == _state.x && path[i].y == _state.y) {
+            currentIndex = i;
+            foundCurrentPosition = true;
+            break;
+        }
+    }
+
+    if (!foundCurrentPosition || currentIndex == 0) {
+        _state.routeReady = false;
+        _pathIndex = 0;
+        setLastError("Reverse return failed: current position is not on the outgoing route");
+        Serial.println(_state.lastError);
+        return;
+    }
+
+    _state.routeReady = true;
+    _pathIndex = currentIndex - 1;
+    setLastError("");
+    Serial.printf("REVERSE ROUTE READY: pathSize=%u nextIndex=%u\n",
+                  static_cast<unsigned>(path.size()),
+                  _pathIndex);
+}
+
 void Robot::syncPositionFromRoute() {
     const auto& path = _navigation.currentPath();
+
+    if (_state.returningHome) {
+        if (_pathIndex < path.size() &&
+            path[_pathIndex].x == _state.x &&
+            path[_pathIndex].y == _state.y &&
+            _pathIndex > 0) {
+            --_pathIndex;
+        }
+
+        return;
+    }
 
     while (_pathIndex < path.size() &&
            path[_pathIndex].x == _state.x &&

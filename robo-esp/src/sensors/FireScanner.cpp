@@ -33,6 +33,7 @@ namespace sensors
         pinMode(_flameSensorPin, INPUT);
 
         analogReadResolution(12);
+        analogSetPinAttenuation(_flameSensorPin, ADC_11db);
 
         ledcSetup(
             _pwmChannel,
@@ -57,8 +58,24 @@ namespace sensors
 
         _hasNewData = false;
 
+        _ambientBaseline = 0;
+
+        _ambientBaselineReady = false;
+
+        _baselineAccumulator = 0;
+
+        _baselineSamples = 0;
+
+        _detectionStartedAt = 0;
+
+        _sweepStartedAt = 0;
+
+        _candidateStartedAt = 0;
+
         _fireDirection =
             FireDirection::None;
+
+        _detectionEnabled = false;
 
         _sweepEnabled = false;
 
@@ -78,7 +95,7 @@ namespace sensors
             updateSweep(currentMillis);
         }
 
-        updateFireReading();
+        updateFireReading(currentMillis);
     }
 
     bool FireScanner::hasNewData() const
@@ -176,6 +193,17 @@ namespace sensors
         _sensorActiveLow = activeLow;
     }
 
+    void FireScanner::setFireThreshold(
+        uint16_t threshold)
+    {
+
+        if (threshold <= 4095)
+        {
+
+            _fireThreshold = threshold;
+        }
+    }
+
     void FireScanner::setServoPulseRange(
         uint16_t minPulseMicros,
         uint16_t maxPulseMicros)
@@ -194,14 +222,77 @@ namespace sensors
         }
     }
 
+    void FireScanner::enableDetection(bool enabled)
+    {
+
+        if (enabled == _detectionEnabled)
+        {
+
+            return;
+        }
+
+        if (enabled && !_detectionEnabled)
+        {
+
+            resetDetection();
+
+            _detectionStartedAt =
+                millis();
+        }
+
+        if (!enabled)
+        {
+
+            resetDetection();
+        }
+
+        _detectionEnabled = enabled;
+
+        Serial.printf(
+            "FIRE DETECTION: %s\n",
+            enabled ? "ENABLED" : "DISABLED");
+    }
+
     void FireScanner::enableSweep(bool enabled)
     {
+
+        if (enabled && !_sweepEnabled)
+        {
+
+            _sweepStartedAt =
+                millis();
+        }
 
         _sweepEnabled = enabled;
 
         Serial.printf(
             "FIRE SWEEP: %s\n",
             enabled ? "ENABLED" : "DISABLED");
+    }
+
+    void FireScanner::center()
+    {
+
+        _currentAngle =
+            clampAngle(_centerAngle);
+
+        _fireAngle =
+            _currentAngle;
+
+        _fireDirection =
+            FireDirection::None;
+
+        _fireDetected = false;
+
+        _candidateStartedAt = 0;
+
+        _sweepIncreasing = true;
+
+        writeServoAngle(_currentAngle);
+
+        Serial.printf(
+            "FIRE SERVO CENTERED: angle=%u\n",
+            _currentAngle);
     }
 
     bool FireScanner::sweepEnabled() const
@@ -264,29 +355,119 @@ namespace sensors
         writeServoAngle(_currentAngle);
     }
 
-    void FireScanner::updateFireReading()
+    void FireScanner::updateFireReading(
+        unsigned long currentMillis)
     {
 
         int rawValue =
             analogRead(_flameSensorPin);
 
+        if (rawValue < 0)
+        {
+
+            return;
+        }
+
+        uint16_t raw =
+            static_cast<uint16_t>(rawValue);
+
+        bool calibrating =
+            !_detectionEnabled ||
+            currentMillis - _detectionStartedAt < _calibrationDurationMillis;
+
+        if (!_detectionEnabled)
+        {
+
+            if (_fireDetected)
+            {
+
+                _hasNewData = true;
+            }
+
+            _fireDetected = false;
+            _fireDirection = FireDirection::None;
+            _candidateStartedAt = 0;
+            resetBaseline();
+            return;
+        }
+
+        if (calibrating || !_ambientBaselineReady)
+        {
+
+            _baselineAccumulator += raw;
+            ++_baselineSamples;
+            if (raw < _calibrationMin) {
+                _calibrationMin = raw;
+            }
+            if (raw > _calibrationMax) {
+                _calibrationMax = raw;
+            }
+
+            if (_baselineSamples > 0)
+            {
+
+                _ambientBaseline =
+                    static_cast<uint16_t>(
+                        _baselineAccumulator /
+                        _baselineSamples);
+
+                _ambientBaselineReady = true;
+
+                uint16_t noiseRange =
+                    static_cast<uint16_t>(_calibrationMax - _calibrationMin);
+                uint16_t noiseThreshold =
+                    static_cast<uint16_t>((noiseRange * 3) + 40);
+                _effectiveFireThreshold =
+                    noiseThreshold > _fireThreshold ? noiseThreshold : _fireThreshold;
+            }
+        }
+
+        uint16_t distanceFromBaseline =
+            raw > _ambientBaseline
+                ? static_cast<uint16_t>(raw - _ambientBaseline)
+                : static_cast<uint16_t>(_ambientBaseline - raw);
+
         Serial.printf(
-            "FLAME ANALOG = %d\n",
-            rawValue);
+            "FLAME RAW=%u BASE=%u DIFF=%u THRESH=%u NOISE=%u DET=%s CAL=%s\n",
+            raw,
+            _ambientBaseline,
+            distanceFromBaseline,
+            _effectiveFireThreshold,
+            static_cast<uint16_t>(_calibrationMax - _calibrationMin),
+            _detectionEnabled ? "true" : "false",
+            calibrating ? "true" : "false");
 
-        /*
-            Ajuste conforme necessário.
+        if (calibrating)
+        {
 
-            Menor valor:
-            menos sensível
+            _fireDetected = false;
+            _fireDirection = FireDirection::None;
+            _candidateStartedAt = 0;
+            return;
+        }
 
-            Maior valor:
-            mais sensível
-        */
-        const int fireThreshold = 1500;
+        bool sampleDetected =
+            _ambientBaselineReady &&
+            distanceFromBaseline >= _effectiveFireThreshold;
+
+        if (sampleDetected)
+        {
+
+            if (_candidateStartedAt == 0)
+            {
+
+                _candidateStartedAt = currentMillis;
+            }
+        }
+        else
+        {
+
+            _candidateStartedAt = 0;
+        }
 
         bool detected =
-            rawValue < fireThreshold;
+            _candidateStartedAt != 0 &&
+            currentMillis - _candidateStartedAt >= _confirmationDurationMillis;
 
         FireDirection previousDirection =
             _fireDirection;
@@ -317,6 +498,28 @@ namespace sensors
         }
 
         _fireDetected = detected;
+    }
+
+    void FireScanner::resetDetection()
+    {
+
+        _fireDetected = false;
+        _hasNewData = false;
+        _fireDirection = FireDirection::None;
+        _candidateStartedAt = 0;
+        resetBaseline();
+    }
+
+    void FireScanner::resetBaseline()
+    {
+
+        _ambientBaseline = 0;
+        _baselineAccumulator = 0;
+        _baselineSamples = 0;
+        _calibrationMin = 4095;
+        _calibrationMax = 0;
+        _effectiveFireThreshold = _fireThreshold;
+        _ambientBaselineReady = false;
     }
 
     void FireScanner::writeServoAngle(

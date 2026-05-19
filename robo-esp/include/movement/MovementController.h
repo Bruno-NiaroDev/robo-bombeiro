@@ -26,6 +26,7 @@ public:
 
     bool moveForwardOneCell();
     bool moveToAdjacentCell(int16_t targetX, int16_t targetY);
+    bool moveBackwardToAdjacentCell(int16_t targetX, int16_t targetY);
     bool turnLeft90();
     bool turnRight90();
 
@@ -51,6 +52,7 @@ private:
     enum class State {
         Idle,
         MovingForward,
+        MovingBackward,
         TurningLeft,
         TurningRight,
         Pausing
@@ -59,20 +61,26 @@ private:
     enum class PendingAction {
         None,
         TurnLeftThenMove,
+        TurnLeftThenMoveBackward,
+        MoveBackward,
         MoveForward
     };
 
     bool startForwardMove();
+    bool startBackwardMove();
     bool startLeftTurn();
     bool startRightTurn();
     void startPause(PendingAction nextAction);
     void finishForwardMove();
+    void finishBackwardMove();
     void finishLeftTurn();
     void finishRightTurn();
     void advancePosition();
+    void retreatPosition();
     bool elapsed(unsigned long currentMillis, unsigned long durationMillis);
     Orientation orientationForDelta(int16_t deltaX, int16_t deltaY) const;
     uint8_t rightTurnsTo(Orientation targetOrientation) const;
+    static Orientation opposite(Orientation orientation);
     static Orientation turnLeft(Orientation orientation);
     static Orientation turnRight(Orientation orientation);
     static const char* orientationName(Orientation orientation);
@@ -85,11 +93,11 @@ private:
     State _state = State::Idle;
     PendingAction _pendingAction = PendingAction::None;
     unsigned long _stateStartedAt = 0;
-    unsigned long _moveDurationMillis = 900;
-    unsigned long _turnDurationMillis = 450;
-    unsigned long _pauseDurationMillis = 150;
-    uint8_t _moveSpeed = 180;
-    uint8_t _turnSpeed = 160;
+    unsigned long _moveDurationMillis = 420;
+    unsigned long _turnDurationMillis = 110;
+    unsigned long _pauseDurationMillis = 180;
+    uint8_t _moveSpeed = 150;
+    uint8_t _turnSpeed = 130;
 };
 
 } // namespace movement

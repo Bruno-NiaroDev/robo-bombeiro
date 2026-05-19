@@ -26,6 +26,12 @@ void MovementController::update(unsigned long currentMillis) {
                 startPause(PendingAction::None);
             }
             break;
+        case State::MovingBackward:
+            if (elapsed(currentMillis, _moveDurationMillis)) {
+                finishBackwardMove();
+                startPause(PendingAction::None);
+            }
+            break;
         case State::TurningLeft:
             if (elapsed(currentMillis, _turnDurationMillis)) {
                 finishLeftTurn();
@@ -51,8 +57,15 @@ void MovementController::update(unsigned long currentMillis) {
                         _pendingAction = PendingAction::MoveForward;
                         startLeftTurn();
                         break;
+                    case PendingAction::TurnLeftThenMoveBackward:
+                        _pendingAction = PendingAction::MoveBackward;
+                        startLeftTurn();
+                        break;
                     case PendingAction::MoveForward:
                         startForwardMove();
+                        break;
+                    case PendingAction::MoveBackward:
+                        startBackwardMove();
                         break;
                 }
             }
@@ -138,6 +151,71 @@ bool MovementController::moveToAdjacentCell(int16_t targetX, int16_t targetY) {
     return startLeftTurn();
 }
 
+bool MovementController::moveBackwardToAdjacentCell(int16_t targetX, int16_t targetY) {
+    if (_state != State::Idle) {
+        Serial.printf("REVERSE MOVEMENT REJECTED: controller busy state=%s target=(%d,%d)\n",
+                      stateName(_state),
+                      targetX,
+                      targetY);
+        return false;
+    }
+
+    Serial.printf("REVERSE MOVEMENT TARGET: current=(%d,%d) next=(%d,%d) orientation=%s\n",
+                  _position.x,
+                  _position.y,
+                  targetX,
+                  targetY,
+                  orientationName(_orientation));
+
+    if (targetX < 0 || targetY < 0 ||
+        targetX >= navigation::GridMap::Width ||
+        targetY >= navigation::GridMap::Height) {
+        Serial.printf("REVERSE MOVEMENT REJECTED: target outside grid (%d,%d)\n", targetX, targetY);
+        return false;
+    }
+
+    int16_t deltaX = targetX - _position.x;
+    int16_t deltaY = targetY - _position.y;
+
+    if ((deltaX == 0 && deltaY == 0) || (deltaX != 0 && deltaY != 0)) {
+        Serial.printf("REVERSE MOVEMENT REJECTED: invalid adjacent delta dx=%d dy=%d diagonal=%s\n",
+                      deltaX,
+                      deltaY,
+                      (deltaX != 0 && deltaY != 0) ? "true" : "false");
+        return false;
+    }
+
+    if (deltaX < -1 || deltaX > 1 || deltaY < -1 || deltaY > 1) {
+        Serial.printf("REVERSE MOVEMENT REJECTED: target is not adjacent dx=%d dy=%d\n", deltaX, deltaY);
+        return false;
+    }
+
+    Orientation targetDirection = orientationForDelta(deltaX, deltaY);
+    Orientation reverseOrientation = opposite(targetDirection);
+    uint8_t turns = rightTurnsTo(reverseOrientation);
+    Serial.printf("REVERSE MOVEMENT PLAN: rearDirection=%s desiredOrientation=%s rightTurns=%u\n",
+                  orientationName(targetDirection),
+                  orientationName(reverseOrientation),
+                  turns);
+
+    if (turns == 0) {
+        return startBackwardMove();
+    }
+
+    _pendingAction = PendingAction::MoveBackward;
+
+    if (turns == 1) {
+        return startRightTurn();
+    }
+
+    if (turns == 2) {
+        _pendingAction = PendingAction::TurnLeftThenMoveBackward;
+        return startLeftTurn();
+    }
+
+    return startLeftTurn();
+}
+
 bool MovementController::turnLeft90() {
     if (_state != State::Idle) {
         Serial.printf("TURN LEFT REJECTED: controller busy state=%s\n", stateName(_state));
@@ -172,6 +250,7 @@ bool MovementController::isBusy() const {
 
 bool MovementController::isMoving() const {
     return _state == State::MovingForward ||
+           _state == State::MovingBackward ||
            _state == State::TurningLeft ||
            _state == State::TurningRight;
 }
@@ -236,6 +315,16 @@ bool MovementController::startForwardMove() {
     return true;
 }
 
+bool MovementController::startBackwardMove() {
+    _motorDriver.backward(_moveSpeed);
+    logState(State::MovingBackward);
+    _stateStartedAt = 0;
+    Serial.printf("MOVEMENT EXECUTED: backward speed=%u orientation=%s\n",
+                  _moveSpeed,
+                  orientationName(_orientation));
+    return true;
+}
+
 bool MovementController::startLeftTurn() {
     _motorDriver.turnLeft(_turnSpeed);
     logState(State::TurningLeft);
@@ -263,6 +352,15 @@ void MovementController::finishForwardMove() {
     _motorDriver.stop();
     advancePosition();
     Serial.printf("MOVEMENT FINISHED: position=(%d,%d) orientation=%s\n",
+                  _position.x,
+                  _position.y,
+                  orientationName(_orientation));
+}
+
+void MovementController::finishBackwardMove() {
+    _motorDriver.stop();
+    retreatPosition();
+    Serial.printf("MOVEMENT FINISHED: position=(%d,%d) orientation=%s reverse=true\n",
                   _position.x,
                   _position.y,
                   orientationName(_orientation));
@@ -309,6 +407,29 @@ void MovementController::advancePosition() {
     }
 }
 
+void MovementController::retreatPosition() {
+    switch (_orientation) {
+        case Orientation::NORTH:
+            ++_position.y;
+            break;
+        case Orientation::SOUTH:
+            --_position.y;
+            break;
+        case Orientation::EAST:
+            --_position.x;
+            break;
+        case Orientation::WEST:
+            ++_position.x;
+            break;
+    }
+
+    if (_position.x < 0 || _position.y < 0 ||
+        _position.x >= navigation::GridMap::Width ||
+        _position.y >= navigation::GridMap::Height) {
+        Serial.printf("MOVEMENT WARNING: position outside grid after reverse (%d,%d)\n", _position.x, _position.y);
+    }
+}
+
 bool MovementController::elapsed(unsigned long currentMillis, unsigned long durationMillis) {
     if (_stateStartedAt == 0) {
         _stateStartedAt = currentMillis;
@@ -346,6 +467,21 @@ uint8_t MovementController::rightTurnsTo(Orientation targetOrientation) const {
     }
 
     return 0;
+}
+
+Orientation MovementController::opposite(Orientation orientation) {
+    switch (orientation) {
+        case Orientation::NORTH:
+            return Orientation::SOUTH;
+        case Orientation::SOUTH:
+            return Orientation::NORTH;
+        case Orientation::EAST:
+            return Orientation::WEST;
+        case Orientation::WEST:
+            return Orientation::EAST;
+    }
+
+    return Orientation::SOUTH;
 }
 
 Orientation MovementController::turnLeft(Orientation orientation) {
@@ -399,6 +535,8 @@ const char* MovementController::stateName(State state) {
             return "Idle";
         case State::MovingForward:
             return "MovingForward";
+        case State::MovingBackward:
+            return "MovingBackward";
         case State::TurningLeft:
             return "TurningLeft";
         case State::TurningRight:

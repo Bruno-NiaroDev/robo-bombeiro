@@ -24,6 +24,11 @@ struct NetworkConfig {
 
 struct NavigationConfig {
     uint16_t updateIntervalMs = 50;
+    uint16_t cellTravelDurationMs = 1050;
+    uint16_t turn90DurationMs = 110;
+    uint16_t movementPauseDurationMs = 180;
+    uint8_t moveSpeed = 150;
+    uint8_t turnSpeed = 130;
 };
 
 class ConfigManager {

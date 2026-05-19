@@ -20,6 +20,8 @@ namespace robot
         void notifyObstacleDetected(uint8_t x, uint8_t y);
         void clearObstacleDetection();
         void notifyFireDetected(bool detected);
+        void notifyFireConfirmed(unsigned long currentMillis);
+        void notifyFireSearchTimedOut();
         void notifyExtinguishingComplete();
         void resetError();
 
@@ -44,6 +46,7 @@ namespace robot
         bool calculateRouteTo(uint8_t x, uint8_t y);
         bool reachedTarget() const;
         bool reachedHome() const;
+        void prepareReverseReturnRoute();
         void syncPositionFromRoute();
         void setLastError(const char *message);
         static const char *stateName(AutonomousState state);

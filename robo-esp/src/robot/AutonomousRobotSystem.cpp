@@ -12,6 +12,12 @@ void AutonomousRobotSystem::begin() {
 
     _motorDriver.begin();
     _movement.begin();
+    const config::NavigationConfig& navigationConfig = config::ConfigManager::instance().navigationConfig();
+    _movement.setMoveDuration(navigationConfig.cellTravelDurationMs);
+    _movement.setTurnDuration(navigationConfig.turn90DurationMs);
+    _movement.setPauseDuration(navigationConfig.movementPauseDurationMs);
+    _movement.setMoveSpeed(navigationConfig.moveSpeed);
+    _movement.setTurnSpeed(navigationConfig.turnSpeed);
     _ultrasonic.begin();
     _fireScanner.begin();
     _pump.begin();
@@ -21,9 +27,12 @@ void AutonomousRobotSystem::begin() {
     _movement.setPosition(navigation::GridMap::Home.x, navigation::GridMap::Home.y);
     _robot.setPosition(navigation::GridMap::Home.x, navigation::GridMap::Home.y);
     _activeWaypoint = {navigation::GridMap::Home.x, navigation::GridMap::Home.y};
+    _pendingObstacle = _activeWaypoint;
+    _obstacleConfirmationActive = false;
     _movementCommandActive = false;
     _pumpCommandActive = false;
     _errorTelemetrySent = false;
+    _fireSearchActive = false;
     _lastTelemetryMillis = 0;
 }
 
@@ -31,7 +40,7 @@ void AutonomousRobotSystem::update(unsigned long currentMillis) {
     updateModules(currentMillis);
     processNetworkCommands();
     processMovementEvents();
-    processSensorEvents();
+    processSensorEvents(currentMillis);
     processPumpEvents();
 
     _robot.update(currentMillis);
@@ -65,9 +74,14 @@ void AutonomousRobotSystem::processNetworkCommands() {
         _movement.setPosition(_robot.state().x, _robot.state().y);
         _robot.setTarget(target.x, target.y);
         _movementCommandActive = false;
+        _obstacleConfirmationActive = false;
         _pumpCommandActive = false;
         _errorTelemetrySent = false;
+        _fireSearchActive = false;
         _pump.turnOff();
+        _fireScanner.enableDetection(false);
+        _fireScanner.enableSweep(false);
+        _fireScanner.center();
     }
 }
 
@@ -83,22 +97,72 @@ void AutonomousRobotSystem::processMovementEvents() {
     }
 }
 
-void AutonomousRobotSystem::processSensorEvents() {
+void AutonomousRobotSystem::processSensorEvents(unsigned long currentMillis) {
     bool navigationState = _robot.autonomousState() == AutonomousState::MOVING ||
                            _robot.autonomousState() == AutonomousState::RETURNING_HOME;
+    bool searchingFire = _robot.autonomousState() == AutonomousState::SEARCHING_FIRE;
+    bool shouldDetectFire = true;
+
+    if (shouldDetectFire) {
+        _fireScanner.enableDetection(true);
+    } else {
+        _fireScanner.enableDetection(false);
+    }
+
+    if (searchingFire && !_fireScanner.sweepEnabled()) {
+        _fireScanner.enableSweep(true);
+        _fireSearchStartedAt = currentMillis;
+        _fireSearchActive = true;
+    } else if (!searchingFire && _fireScanner.sweepEnabled()) {
+        _fireScanner.enableSweep(false);
+        _fireSearchActive = false;
+    }
 
     if (_ultrasonic.hasNewData()) {
         if (_movementCommandActive && navigationState && _ultrasonic.obstacleDetected()) {
             _movement.stop();
-            _robot.notifyObstacleDetected(_activeWaypoint.x, _activeWaypoint.y);
             _movementCommandActive = false;
+            _pendingObstacle = _activeWaypoint;
+            _obstacleDetectedAt = currentMillis;
+            _obstacleConfirmationActive = true;
+            Serial.printf("OBSTACLE WAIT: candidate=(%u,%u) confirmationMs=%lu\n",
+                          _pendingObstacle.x,
+                          _pendingObstacle.y,
+                          ObstacleConfirmationMillis);
+        } else if (_obstacleConfirmationActive && navigationState) {
+            if (!_ultrasonic.obstacleDetected()) {
+                Serial.printf("OBSTACLE CLEARED: candidate=(%u,%u)\n",
+                              _pendingObstacle.x,
+                              _pendingObstacle.y);
+                _obstacleConfirmationActive = false;
+            } else if (currentMillis - _obstacleDetectedAt >= ObstacleConfirmationMillis) {
+                Serial.printf("OBSTACLE CONFIRMED: candidate=(%u,%u)\n",
+                              _pendingObstacle.x,
+                              _pendingObstacle.y);
+                _robot.notifyObstacleDetected(_pendingObstacle.x, _pendingObstacle.y);
+                _obstacleConfirmationActive = false;
+            }
         }
 
         _ultrasonic.clearNewData();
     }
 
-    if (_robot.autonomousState() == AutonomousState::SEARCHING_FIRE) {
-        _robot.notifyFireDetected(_fireScanner.fireDetected());
+    if (shouldDetectFire) {
+        bool fireConfirmed = _fireScanner.fireDetected();
+        _robot.notifyFireDetected(fireConfirmed);
+
+        if (fireConfirmed) {
+            _fireScanner.enableSweep(false);
+            _fireSearchActive = false;
+            _robot.notifyFireConfirmed(currentMillis);
+        } else if (_fireSearchActive &&
+                   currentMillis - _fireSearchStartedAt >= FireSearchDurationMillis) {
+            Serial.println("FIRE SEARCH TIMEOUT: returning home");
+            _fireScanner.enableSweep(false);
+            _fireScanner.center();
+            _fireSearchActive = false;
+            startReturningHome();
+        }
     }
 
     if (_fireScanner.hasNewData()) {
@@ -109,6 +173,7 @@ void AutonomousRobotSystem::processSensorEvents() {
 void AutonomousRobotSystem::processPumpEvents() {
     if (_pumpCommandActive && !_pump.isOn()) {
         _pumpCommandActive = false;
+        _fireScanner.center();
         _robot.notifyExtinguishingComplete();
     }
 }
@@ -136,6 +201,7 @@ void AutonomousRobotSystem::executeStateActions(unsigned long currentMillis) {
 
 void AutonomousRobotSystem::commandNextCell() {
     if (_movementCommandActive ||
+        _obstacleConfirmationActive ||
         _movement.isBusy() ||
         !_robot.state().routeReady ||
         !_robot.hasNextWaypoint()) {
@@ -152,7 +218,11 @@ void AutonomousRobotSystem::commandNextCell() {
                   waypoint.y,
                   static_cast<unsigned>(_robot.currentPath().size()));
 
-    if (_movement.moveToAdjacentCell(waypoint.x, waypoint.y)) {
+    bool commandAccepted = _robot.autonomousState() == AutonomousState::RETURNING_HOME
+        ? _movement.moveBackwardToAdjacentCell(waypoint.x, waypoint.y)
+        : _movement.moveToAdjacentCell(waypoint.x, waypoint.y);
+
+    if (commandAccepted) {
         _activeWaypoint = waypoint;
         _movementCommandActive = true;
     } else {
@@ -169,7 +239,18 @@ void AutonomousRobotSystem::startExtinguishing(unsigned long currentMillis) {
         return;
     }
 
+    _fireScanner.enableSweep(false);
+    _fireScanner.enableDetection(false);
+    _fireSearchActive = false;
     _pumpCommandActive = _pump.runFor(ExtinguishingDurationMillis, currentMillis);
+}
+
+void AutonomousRobotSystem::startReturningHome() {
+    _movement.stop();
+    _movement.setPosition(_robot.state().x, _robot.state().y);
+    _robot.notifyFireSearchTimedOut();
+    _movementCommandActive = false;
+    _obstacleConfirmationActive = false;
 }
 
 void AutonomousRobotSystem::sendTelemetry(unsigned long currentMillis) {
