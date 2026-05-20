@@ -4,6 +4,25 @@
 
 namespace robot {
 
+namespace {
+
+uint8_t headingFromOrientation(movement::Orientation orientation) {
+    switch (orientation) {
+        case movement::Orientation::NORTH:
+            return 0;
+        case movement::Orientation::EAST:
+            return 1;
+        case movement::Orientation::SOUTH:
+            return 2;
+        case movement::Orientation::WEST:
+            return 3;
+    }
+
+    return 2;
+}
+
+} // namespace
+
 AutonomousRobotSystem::AutonomousRobotSystem()
     : _movement(_motorDriver) {}
 
@@ -24,8 +43,19 @@ void AutonomousRobotSystem::begin() {
     _network.begin();
     _robot.begin();
 
+    const config::RobotConfig& robotConfig = config::ConfigManager::instance().robotConfig();
+    if (robotConfig.startX != navigation::GridMap::Home.x ||
+        robotConfig.startY != navigation::GridMap::Home.y) {
+        Serial.printf("CONFIG WARNING: start=(%u,%u) difere de Home=(%u,%u); usando Home\n",
+                      robotConfig.startX,
+                      robotConfig.startY,
+                      navigation::GridMap::Home.x,
+                      navigation::GridMap::Home.y);
+    }
+
     _movement.setPosition(navigation::GridMap::Home.x, navigation::GridMap::Home.y);
     _robot.setPosition(navigation::GridMap::Home.x, navigation::GridMap::Home.y);
+    _robot.setHeading(headingFromOrientation(_movement.orientation()));
     _activeWaypoint = {navigation::GridMap::Home.x, navigation::GridMap::Home.y};
     _pendingObstacle = _activeWaypoint;
     _obstacleConfirmationActive = false;
@@ -38,7 +68,7 @@ void AutonomousRobotSystem::begin() {
 
 void AutonomousRobotSystem::update(unsigned long currentMillis) {
     updateModules(currentMillis);
-    processNetworkCommands();
+    processNetworkCommands(currentMillis);
     processMovementEvents();
     processSensorEvents(currentMillis);
     processPumpEvents();
@@ -61,7 +91,7 @@ void AutonomousRobotSystem::updateModules(unsigned long currentMillis) {
     _pump.update(currentMillis);
 }
 
-void AutonomousRobotSystem::processNetworkCommands() {
+void AutonomousRobotSystem::processNetworkCommands(unsigned long currentMillis) {
     if (!_network.hasTargetPosition()) {
         return;
     }
@@ -72,7 +102,7 @@ void AutonomousRobotSystem::processNetworkCommands() {
         Serial.printf("NETWORK TARGET CONSUMED: (%u,%u)\n", target.x, target.y);
         _movement.stop();
         _movement.setPosition(_robot.state().x, _robot.state().y);
-        _robot.setTarget(target.x, target.y);
+        _robot.setTarget(target.x, target.y, currentMillis);
         _movementCommandActive = false;
         _obstacleConfirmationActive = false;
         _pumpCommandActive = false;
@@ -93,6 +123,7 @@ void AutonomousRobotSystem::processMovementEvents() {
     if (!_movement.isBusy()) {
         movement::GridPosition position = _movement.position();
         _robot.notifyCellReached(static_cast<uint8_t>(position.x), static_cast<uint8_t>(position.y));
+        _robot.setHeading(headingFromOrientation(_movement.orientation()));
         _movementCommandActive = false;
     }
 }
@@ -101,13 +132,10 @@ void AutonomousRobotSystem::processSensorEvents(unsigned long currentMillis) {
     bool navigationState = _robot.autonomousState() == AutonomousState::MOVING ||
                            _robot.autonomousState() == AutonomousState::RETURNING_HOME;
     bool searchingFire = _robot.autonomousState() == AutonomousState::SEARCHING_FIRE;
-    bool shouldDetectFire = true;
+    bool shouldDetectFire = _robot.autonomousState() == AutonomousState::MOVING ||
+                            searchingFire;
 
-    if (shouldDetectFire) {
-        _fireScanner.enableDetection(true);
-    } else {
-        _fireScanner.enableDetection(false);
-    }
+    _fireScanner.enableDetection(shouldDetectFire);
 
     if (searchingFire && !_fireScanner.sweepEnabled()) {
         _fireScanner.enableSweep(true);
@@ -152,6 +180,9 @@ void AutonomousRobotSystem::processSensorEvents(unsigned long currentMillis) {
         _robot.notifyFireDetected(fireConfirmed);
 
         if (fireConfirmed) {
+            _movement.stop();
+            _movementCommandActive = false;
+            _obstacleConfirmationActive = false;
             _fireScanner.enableSweep(false);
             _fireSearchActive = false;
             _robot.notifyFireConfirmed(currentMillis);
@@ -218,7 +249,9 @@ void AutonomousRobotSystem::commandNextCell() {
                   waypoint.y,
                   static_cast<unsigned>(_robot.currentPath().size()));
 
-    bool commandAccepted = _robot.autonomousState() == AutonomousState::RETURNING_HOME
+    bool reverseReturn = _robot.autonomousState() == AutonomousState::RETURNING_HOME &&
+                         _robot.state().returningHome;
+    bool commandAccepted = reverseReturn
         ? _movement.moveBackwardToAdjacentCell(waypoint.x, waypoint.y)
         : _movement.moveToAdjacentCell(waypoint.x, waypoint.y);
 
@@ -226,11 +259,19 @@ void AutonomousRobotSystem::commandNextCell() {
         _activeWaypoint = waypoint;
         _movementCommandActive = true;
     } else {
-        Serial.printf("MOVEMENT COMMAND FAILED: waypoint=(%u,%u) robot=(%u,%u)\n",
-                      waypoint.x,
-                      waypoint.y,
-                      robotState.x,
-                      robotState.y);
+        char error[128];
+        snprintf(error,
+                 sizeof(error),
+                 "Movement failed: robot=(%u,%u) waypoint=(%u,%u) returning=%s",
+                 robotState.x,
+                 robotState.y,
+                 waypoint.x,
+                 waypoint.y,
+                 _robot.autonomousState() == AutonomousState::RETURNING_HOME ? "true" : "false");
+        Serial.println(error);
+        _movement.stop();
+        _movementCommandActive = false;
+        _robot.notifyMovementFailed(error);
     }
 }
 
@@ -274,6 +315,7 @@ void AutonomousRobotSystem::sendTelemetry(unsigned long currentMillis) {
     network::TelemetryPayload telemetry;
     telemetry.x = robotState.x;
     telemetry.y = robotState.y;
+    telemetry.heading = robotState.heading;
     telemetry.state = stateName();
     telemetry.pathSize = static_cast<uint8_t>(_robot.currentPath().size());
     telemetry.targetX = robotState.targetX;

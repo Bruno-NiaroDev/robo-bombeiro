@@ -21,7 +21,7 @@ public:
 
 private:
     void updateModules(unsigned long currentMillis);
-    void processNetworkCommands();
+    void processNetworkCommands(unsigned long currentMillis);
     void processMovementEvents();
     void processSensorEvents(unsigned long currentMillis);
     void processPumpEvents();

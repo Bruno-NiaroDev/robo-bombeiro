@@ -46,6 +46,7 @@ void MotorDriver::backward(uint8_t speed) {
 }
 
 void MotorDriver::turnLeft(uint8_t speed) {
+    
     _direction = Direction::TurnLeft;
     _speed = speed;
     _dirty = true;

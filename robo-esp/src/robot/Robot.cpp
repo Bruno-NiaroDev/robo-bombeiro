@@ -43,7 +43,7 @@ void Robot::update(unsigned long currentMillis) {
     }
 }
 
-bool Robot::setTarget(uint8_t x, uint8_t y) {
+bool Robot::setTarget(uint8_t x, uint8_t y, unsigned long currentMillis) {
     Serial.printf("TARGET RECEIVED: (%u,%u)\n", x, y);
 
     if (!_navigation.gridMap().isValidPosition(x, y)) {
@@ -82,7 +82,7 @@ bool Robot::setTarget(uint8_t x, uint8_t y) {
     setLastError("");
     Serial.println("GRID AFTER TARGET RECEIVED");
     _navigation.gridMap().debugPrintGrid(_state.x, _state.y, _state.targetX, _state.targetY, _state.hasTarget);
-    transitionTo(AutonomousState::RECEIVING_TARGET, _stateStartedAt );
+    transitionTo(AutonomousState::RECEIVING_TARGET, currentMillis);
     return true;
 }
 
@@ -102,9 +102,32 @@ void Robot::setPosition(uint8_t x, uint8_t y) {
     Serial.printf("ROBOT POSITION SET: (%u,%u)\n", x, y);
 }
 
+void Robot::setHeading(uint8_t heading) {
+    if (heading > 3) {
+        return;
+    }
+
+    _state.heading = heading;
+}
+
 void Robot::notifyCellReached(uint8_t x, uint8_t y) {
-    setPosition(x, y);
+    if (!_navigation.gridMap().isValidPosition(x, y)) {
+        char error[128];
+        snprintf(error, sizeof(error), "Cell reached outside grid (%u,%u)", x, y);
+        enterError(error);
+        return;
+    }
+
+    _state.x = x;
+    _state.y = y;
+    Serial.printf("ROBOT CELL REACHED: (%u,%u)\n", x, y);
     syncPositionFromRoute();
+}
+
+void Robot::notifyMovementFailed(const char* message) {
+    char error[128];
+    snprintf(error, sizeof(error), "%s", message && message[0] != '\0' ? message : "Movement command failed");
+    enterError(error);
 }
 
 void Robot::notifyObstacleDetected(uint8_t x, uint8_t y) {
@@ -276,14 +299,13 @@ void Robot::handleAvoidingObstacle(unsigned long currentMillis) {
     _navigation.gridMap().debugPrintGrid(_state.x, _state.y, _state.targetX, _state.targetY, _state.hasTarget);
 
     if (_state.returningHome) {
-        _state.routeReady = false;
-        _routeRecalculationPending = true;
-
         if (!calculateRouteTo(navigation::GridMap::Home.x, navigation::GridMap::Home.y)) {
             enterError(_state.lastError);
             return;
         }
 
+        // Novo BFS e avanco celula a celula; nao usar marcha a re no caminho replanejado.
+        _state.returningHome = false;
         transitionTo(AutonomousState::RETURNING_HOME, currentMillis);
     } else {
         transitionTo(AutonomousState::CALCULATING_ROUTE, currentMillis);
@@ -329,7 +351,17 @@ void Robot::handleReturningHome(unsigned long currentMillis) {
     }
 
     if (!_state.routeReady) {
-        enterError(_state.lastError[0] != '\0' ? _state.lastError : "Reverse return route is not ready");
+        if (calculateRouteTo(navigation::GridMap::Home.x, navigation::GridMap::Home.y)) {
+            _state.returningHome = false;
+            return;
+        }
+
+        enterError(_state.lastError[0] != '\0' ? _state.lastError : "Return route is not ready");
+        return;
+    }
+
+    if (!hasNextWaypoint() && !reachedHome()) {
+        enterError("Return stalled: no valid waypoint from current position");
     }
 }
 

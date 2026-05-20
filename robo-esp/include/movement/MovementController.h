@@ -94,10 +94,10 @@ private:
     PendingAction _pendingAction = PendingAction::None;
     unsigned long _stateStartedAt = 0;
     unsigned long _moveDurationMillis = 420;
-    unsigned long _turnDurationMillis = 110;
+    unsigned long _turnDurationMillis = 1000;
     unsigned long _pauseDurationMillis = 180;
     uint8_t _moveSpeed = 150;
-    uint8_t _turnSpeed = 130;
+    uint8_t _turnSpeed = 250;
 };
 
 } // namespace movement

@@ -67,6 +67,7 @@ bool WebSocketClient::sendTelemetry(const TelemetryPayload& telemetry) {
     JsonObject payload = doc.createNestedObject("payload");
     payload["x"] = telemetry.x;
     payload["y"] = telemetry.y;
+    payload["heading"] = telemetry.heading;
     payload["state"] = telemetry.state;
     payload["pathSize"] = telemetry.pathSize;
     payload["targetX"] = telemetry.targetX;

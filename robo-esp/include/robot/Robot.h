@@ -14,9 +14,11 @@ namespace robot
         void begin();
         void update(unsigned long currentMillis);
 
-        bool setTarget(uint8_t x, uint8_t y);
+        bool setTarget(uint8_t x, uint8_t y, unsigned long currentMillis);
         void setPosition(uint8_t x, uint8_t y);
+        void setHeading(uint8_t heading);
         void notifyCellReached(uint8_t x, uint8_t y);
+        void notifyMovementFailed(const char *message);
         void notifyObstacleDetected(uint8_t x, uint8_t y);
         void clearObstacleDetection();
         void notifyFireDetected(bool detected);

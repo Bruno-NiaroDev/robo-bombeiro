@@ -23,6 +23,7 @@ struct TargetPositionMessage {
 struct TelemetryPayload {
     uint8_t x = 0;
     uint8_t y = 0;
+    uint8_t heading = 2;
     const char* state = "IDLE";
     uint8_t pathSize = 0;
     uint8_t targetX = 0;
