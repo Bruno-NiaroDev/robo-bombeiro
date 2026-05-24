@@ -90,8 +90,7 @@ void GridMap::resetDynamicObstacles() {
 void GridMap::loadFixedBlockedCells() {
     // Obstaculos fixos da arena 4x4
     _fixedBlocked[1][1] = true;
-    _fixedBlocked[2][1] = true;
-    _fixedBlocked[2][1] = true;
+    _fixedBlocked[1][2] = true;
     _fixedBlocked[2][2] = true;
 }
 

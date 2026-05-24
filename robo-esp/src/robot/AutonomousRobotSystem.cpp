@@ -1,5 +1,6 @@
 #include "robot/AutonomousRobotSystem.h"
 #include "config/ConfigManager.h"
+#include "Pins.h"
 #include <Arduino.h>
 
 namespace robot {
@@ -21,6 +22,24 @@ uint8_t headingFromOrientation(movement::Orientation orientation) {
     return 2;
 }
 
+movement::Orientation orientationFromHeading(uint8_t heading) {
+    switch (heading) {
+        case 0:
+            return movement::Orientation::NORTH;
+        case 1:
+            return movement::Orientation::EAST;
+        case 3:
+            return movement::Orientation::WEST;
+        default:
+            return movement::Orientation::SOUTH;
+    }
+}
+
+void syncMovementFromRobot(movement::MovementController& movement, const RobotState& robotState) {
+    movement.setPosition(static_cast<int16_t>(robotState.x), static_cast<int16_t>(robotState.y));
+    movement.setOrientation(orientationFromHeading(robotState.heading));
+}
+
 } // namespace
 
 AutonomousRobotSystem::AutonomousRobotSystem()
@@ -30,6 +49,11 @@ void AutonomousRobotSystem::begin() {
     config::ConfigManager::instance().begin();
 
     _motorDriver.begin();
+    if (_imu.begin(pins::sensors::imu::SDA, pins::sensors::imu::SCL)) {
+        _movement.setImu(&_imu);
+    } else {
+        Serial.println("AVISO: IMU nao disponivel, navegacao por timer apenas");
+    }
     _movement.begin();
     const config::NavigationConfig& navigationConfig = config::ConfigManager::instance().navigationConfig();
     _movement.setMoveDuration(navigationConfig.cellTravelDurationMs);
@@ -37,9 +61,41 @@ void AutonomousRobotSystem::begin() {
     _movement.setPauseDuration(navigationConfig.movementPauseDurationMs);
     _movement.setMoveSpeed(navigationConfig.moveSpeed);
     _movement.setTurnSpeed(navigationConfig.turnSpeed);
+    _movement.setMinTurnSpeed(navigationConfig.minTurnSpeed);
+    _movement.setTurnTolerance(navigationConfig.turnToleranceDeg);
+    _movement.setTurnPid(navigationConfig.turnPidKp,
+                         navigationConfig.turnPidKi,
+                         navigationConfig.turnPidKd);
+    _movement.setHeadingPid(navigationConfig.headingPidKp,
+                            navigationConfig.headingPidKi,
+                            navigationConfig.headingPidKd);
+    _movement.setTurnLeftPositiveYaw(navigationConfig.turnLeftPositiveYaw);
+    _imu.setYawInverted(navigationConfig.imuYawInverted);
+    _imu.setFilterAlpha(navigationConfig.imuFilterAlpha);
+    if (_imu.isReady()) {
+        _imu.resetYaw();
+        Serial.println("IMU: yaw zerado na orientacao inicial");
+    }
+
+    // Aplica a orientação física do robô ao ligar
+    // 0=NORTH 1=EAST 2=SOUTH 3=WEST — ajuste em NavigationConfig::initialOrientationValue
+    movement::Orientation initOrientation;
+    switch (navigationConfig.initialOrientationValue) {
+        case 0: initOrientation = movement::Orientation::NORTH; break;
+        case 1: initOrientation = movement::Orientation::EAST;  break;
+        case 3: initOrientation = movement::Orientation::WEST;  break;
+        default: initOrientation = movement::Orientation::SOUTH; break;
+    }
+    _movement.setOrientation(initOrientation);
+    Serial.printf("ORIENTACAO INICIAL: %s (value=%u)\n",
+                  navigationConfig.initialOrientationValue == 0 ? "NORTH" :
+                  navigationConfig.initialOrientationValue == 1 ? "EAST"  :
+                  navigationConfig.initialOrientationValue == 3 ? "WEST"  : "SOUTH",
+                  navigationConfig.initialOrientationValue);
     _ultrasonic.begin();
     _fireScanner.begin();
     _pump.begin();
+    _pump.setMaxRunTime(ExtinguishingDurationMillis + 2000); // margem de 2s acima da duração configurada
     _network.begin();
     _robot.begin();
 
@@ -85,6 +141,7 @@ const RobotState& AutonomousRobotSystem::state() const {
 void AutonomousRobotSystem::updateModules(unsigned long currentMillis) {
     config::ConfigManager::instance().update(currentMillis);
     _network.update(currentMillis);
+    _imu.update();
     _movement.update(currentMillis);
     _ultrasonic.update(currentMillis);
     _fireScanner.update(currentMillis);
@@ -101,7 +158,7 @@ void AutonomousRobotSystem::processNetworkCommands(unsigned long currentMillis) 
     if (target.available) {
         Serial.printf("NETWORK TARGET CONSUMED: (%u,%u)\n", target.x, target.y);
         _movement.stop();
-        _movement.setPosition(_robot.state().x, _robot.state().y);
+        syncMovementFromRobot(_movement, _robot.state());
         _robot.setTarget(target.x, target.y, currentMillis);
         _movementCommandActive = false;
         _obstacleConfirmationActive = false;
@@ -109,7 +166,7 @@ void AutonomousRobotSystem::processNetworkCommands(unsigned long currentMillis) 
         _errorTelemetrySent = false;
         _fireSearchActive = false;
         _pump.turnOff();
-        _fireScanner.enableDetection(false);
+        _fireScanner.enableDetection(false, currentMillis);
         _fireScanner.enableSweep(false);
         _fireScanner.center();
     }
@@ -122,6 +179,14 @@ void AutonomousRobotSystem::processMovementEvents() {
 
     if (!_movement.isBusy()) {
         movement::GridPosition position = _movement.position();
+        if (position.x != static_cast<int16_t>(_activeWaypoint.x) ||
+            position.y != static_cast<int16_t>(_activeWaypoint.y)) {
+            Serial.printf("MOVEMENT MISMATCH: reached=(%d,%d) waypoint=(%u,%u)\n",
+                          position.x,
+                          position.y,
+                          _activeWaypoint.x,
+                          _activeWaypoint.y);
+        }
         _robot.notifyCellReached(static_cast<uint8_t>(position.x), static_cast<uint8_t>(position.y));
         _robot.setHeading(headingFromOrientation(_movement.orientation()));
         _movementCommandActive = false;
@@ -131,17 +196,19 @@ void AutonomousRobotSystem::processMovementEvents() {
 void AutonomousRobotSystem::processSensorEvents(unsigned long currentMillis) {
     bool navigationState = _robot.autonomousState() == AutonomousState::MOVING ||
                            _robot.autonomousState() == AutonomousState::RETURNING_HOME;
-    bool searchingFire = _robot.autonomousState() == AutonomousState::SEARCHING_FIRE;
-    bool shouldDetectFire = _robot.autonomousState() == AutonomousState::MOVING ||
-                            searchingFire;
+    bool searchingFire   = _robot.autonomousState() == AutonomousState::SEARCHING_FIRE;
+    bool extinguishing   = _robot.autonomousState() == AutonomousState::EXTINGUISHING_FIRE;
+    bool shouldDetectFire = searchingFire; // detecção apenas na busca ativa, nunca durante navegação
 
-    _fireScanner.enableDetection(shouldDetectFire);
+    _fireScanner.enableDetection(shouldDetectFire, currentMillis);
 
     if (searchingFire && !_fireScanner.sweepEnabled()) {
+        // Inicia varredura ao entrar no modo busca
         _fireScanner.enableSweep(true);
         _fireSearchStartedAt = currentMillis;
         _fireSearchActive = true;
-    } else if (!searchingFire && _fireScanner.sweepEnabled()) {
+    } else if (!searchingFire && !extinguishing && _fireScanner.sweepEnabled()) {
+        // Desliga varredura ao sair da busca — mas mantém ativa durante extinção
         _fireScanner.enableSweep(false);
         _fireSearchActive = false;
     }
@@ -183,7 +250,7 @@ void AutonomousRobotSystem::processSensorEvents(unsigned long currentMillis) {
             _movement.stop();
             _movementCommandActive = false;
             _obstacleConfirmationActive = false;
-            _fireScanner.enableSweep(false);
+            // Sweep mantido: continua varrendo durante extinção (desligado só ao fim da bomba)
             _fireSearchActive = false;
             _robot.notifyFireConfirmed(currentMillis);
         } else if (_fireSearchActive &&
@@ -192,7 +259,7 @@ void AutonomousRobotSystem::processSensorEvents(unsigned long currentMillis) {
             _fireScanner.enableSweep(false);
             _fireScanner.center();
             _fireSearchActive = false;
-            startReturningHome();
+            startReturningHome(currentMillis);
         }
     }
 
@@ -204,8 +271,13 @@ void AutonomousRobotSystem::processSensorEvents(unsigned long currentMillis) {
 void AutonomousRobotSystem::processPumpEvents() {
     if (_pumpCommandActive && !_pump.isOn()) {
         _pumpCommandActive = false;
-        _fireScanner.center();
-        _robot.notifyExtinguishingComplete();
+
+        // Extinção concluída: para varredura e recolhe servos para posição de repouso
+        _fireScanner.enableSweep(false);
+        _fireScanner.center(); // horizontal → 0°, vertical → 0°
+        Serial.println("EXTINGUISHING DONE: servos recolhidos, retornando home");
+
+        _robot.notifyExtinguishingComplete(); // → RETURNING_HOME
     }
 }
 
@@ -239,19 +311,21 @@ void AutonomousRobotSystem::commandNextCell() {
         return;
     }
 
-    navigation::Coordinate waypoint = _robot.nextWaypoint();
     const RobotState& robotState = _robot.state();
+    syncMovementFromRobot(_movement, robotState);
 
-    Serial.printf("NEXT WAYPOINT: current=(%u,%u) waypoint=(%u,%u) pathSize=%u\n",
+    navigation::Coordinate waypoint = _robot.nextWaypoint();
+
+    Serial.printf("NEXT WAYPOINT: robot=(%u,%u) waypoint=(%u,%u) pathSize=%u heading=%u\n",
                   robotState.x,
                   robotState.y,
                   waypoint.x,
                   waypoint.y,
-                  static_cast<unsigned>(_robot.currentPath().size()));
+                  static_cast<unsigned>(_robot.currentPath().size()),
+                  robotState.heading);
 
-    bool reverseReturn = _robot.autonomousState() == AutonomousState::RETURNING_HOME &&
-                         _robot.state().returningHome;
-    bool commandAccepted = reverseReturn
+    const bool returningHome = _robot.autonomousState() == AutonomousState::RETURNING_HOME;
+    bool commandAccepted = returningHome
         ? _movement.moveBackwardToAdjacentCell(waypoint.x, waypoint.y)
         : _movement.moveToAdjacentCell(waypoint.x, waypoint.y);
 
@@ -267,7 +341,7 @@ void AutonomousRobotSystem::commandNextCell() {
                  robotState.y,
                  waypoint.x,
                  waypoint.y,
-                 _robot.autonomousState() == AutonomousState::RETURNING_HOME ? "true" : "false");
+                 returningHome ? "true" : "false");
         Serial.println(error);
         _movement.stop();
         _movementCommandActive = false;
@@ -280,16 +354,19 @@ void AutonomousRobotSystem::startExtinguishing(unsigned long currentMillis) {
         return;
     }
 
-    _fireScanner.enableSweep(false);
-    _fireScanner.enableDetection(false);
+    // Desativa detecção para não re-disparar, mas mantém varredura horizontal ativa:
+    // o servo continua varrendo enquanto a bomba joga água por ExtinguishingDurationMillis.
+    _fireScanner.enableDetection(false, currentMillis);
     _fireSearchActive = false;
     _pumpCommandActive = _pump.runFor(ExtinguishingDurationMillis, currentMillis);
+    Serial.printf("EXTINGUISHING: bomba ligada por %lums, varredura mantida\n",
+                  ExtinguishingDurationMillis);
 }
 
-void AutonomousRobotSystem::startReturningHome() {
+void AutonomousRobotSystem::startReturningHome(unsigned long currentMillis) {
     _movement.stop();
-    _movement.setPosition(_robot.state().x, _robot.state().y);
-    _robot.notifyFireSearchTimedOut();
+    syncMovementFromRobot(_movement, _robot.state());
+    _robot.notifyFireSearchTimedOut(currentMillis);
     _movementCommandActive = false;
     _obstacleConfirmationActive = false;
 }
@@ -316,6 +393,8 @@ void AutonomousRobotSystem::sendTelemetry(unsigned long currentMillis) {
     telemetry.x = robotState.x;
     telemetry.y = robotState.y;
     telemetry.heading = robotState.heading;
+    telemetry.imuReady = _imu.isReady();
+    telemetry.imuYaw = _imu.isReady() ? _imu.yaw() : 0.0f;
     telemetry.state = stateName();
     telemetry.pathSize = static_cast<uint8_t>(_robot.currentPath().size());
     telemetry.targetX = robotState.targetX;
@@ -323,6 +402,7 @@ void AutonomousRobotSystem::sendTelemetry(unsigned long currentMillis) {
     telemetry.obstacleDetected = robotState.obstacleDetected;
     telemetry.fireDetected = robotState.fireDetected;
     telemetry.pumpOn = _pump.isOn();
+    telemetry.flameRaw = _fireScanner.rawValue();
     telemetry.lastError = _robot.lastError();
 
     bool sent = _network.sendTelemetry(telemetry);

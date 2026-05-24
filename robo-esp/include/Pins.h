@@ -32,9 +32,16 @@ namespace sensors {
 
     namespace ultrasonic {
         /// Ultrasonic sensor trigger output.
-        constexpr int TRIG = 22;
+        constexpr int TRIG = 5;
         /// Ultrasonic sensor echo input.
         constexpr int ECHO = 23;
+    }
+
+    namespace imu {
+        /// I2C data pin for MPU6050.
+        constexpr int SDA = 21;
+        /// I2C clock pin for MPU6050.
+        constexpr int SCL = 22;
     }
 }
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "actuators/PumpController.h"
+#include "drivers/ImuDriver.h"
 #include "drivers/MotorDriver.h"
 #include "movement/MovementController.h"
 #include "network/NetworkManager.h"
@@ -28,15 +29,16 @@ private:
     void executeStateActions(unsigned long currentMillis);
     void commandNextCell();
     void startExtinguishing(unsigned long currentMillis);
-    void startReturningHome();
+    void startReturningHome(unsigned long currentMillis);
     void sendTelemetry(unsigned long currentMillis);
     const char* stateName() const;
 
-    static const unsigned long ExtinguishingDurationMillis = 3000;
+    static const unsigned long ExtinguishingDurationMillis = 10000; // 10s jogando água
     static const unsigned long ObstacleConfirmationMillis = 5000;
     static const unsigned long FireSearchDurationMillis = 10000;
 
     drivers::MotorDriver _motorDriver;
+    drivers::ImuDriver _imu;
     movement::MovementController _movement;
     sensors::UltrasonicSensor _ultrasonic;
     sensors::FireScanner _fireScanner;

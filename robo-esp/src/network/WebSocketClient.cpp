@@ -61,13 +61,15 @@ TargetPositionMessage WebSocketClient::consumeTargetPosition() {
 }
 
 bool WebSocketClient::sendTelemetry(const TelemetryPayload& telemetry) {
-    StaticJsonDocument<384> doc;
+    StaticJsonDocument<512> doc;
     doc["type"] = "TELEMETRY";
 
     JsonObject payload = doc.createNestedObject("payload");
     payload["x"] = telemetry.x;
     payload["y"] = telemetry.y;
     payload["heading"] = telemetry.heading;
+    payload["imuReady"] = telemetry.imuReady;
+    payload["imuYaw"] = telemetry.imuYaw;
     payload["state"] = telemetry.state;
     payload["pathSize"] = telemetry.pathSize;
     payload["targetX"] = telemetry.targetX;
@@ -75,12 +77,13 @@ bool WebSocketClient::sendTelemetry(const TelemetryPayload& telemetry) {
     payload["obstacleDetected"] = telemetry.obstacleDetected;
     payload["fireDetected"] = telemetry.fireDetected;
     payload["pumpOn"] = telemetry.pumpOn;
+    payload["flameRaw"] = telemetry.flameRaw;
     payload["lastError"] = telemetry.lastError;
 
-    char buffer[384];
+    char buffer[512];
     size_t length = serializeJson(doc, buffer, sizeof(buffer));
 
-    if (length == 0 || length >= sizeof(buffer)) {
+    if (length == 0 || length >= sizeof(buffer) - 1) {
         Serial.println("TELEMETRY ERROR: JSON buffer too small or serialization failed");
         return false;
     }

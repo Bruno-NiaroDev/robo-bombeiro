@@ -2,7 +2,6 @@
 
 #include <vector>
 #include "../navigation/NavigationManager.h"
-#include "../sensors/FireScanner.h"
 #include "RobotState.h"
 
 namespace robot
@@ -23,7 +22,7 @@ namespace robot
         void clearObstacleDetection();
         void notifyFireDetected(bool detected);
         void notifyFireConfirmed(unsigned long currentMillis);
-        void notifyFireSearchTimedOut();
+        void notifyFireSearchTimedOut(unsigned long currentMillis);
         void notifyExtinguishingComplete();
         void resetError();
 
@@ -46,6 +45,7 @@ namespace robot
         void handleReturningHome(unsigned long currentMillis);
         void enterError(const char *message);
         bool calculateRouteTo(uint8_t x, uint8_t y);
+        bool planReverseReturnHome(unsigned long currentMillis);
         bool reachedTarget() const;
         bool reachedHome() const;
         void prepareReverseReturnRoute();
@@ -55,7 +55,6 @@ namespace robot
 
         RobotState _state;
         navigation::NavigationManager _navigation;
-        sensors::FireScanner _fireScanner;
         uint8_t _pathIndex = 0;
         uint8_t _obstacleX = 0;
         uint8_t _obstacleY = 0;

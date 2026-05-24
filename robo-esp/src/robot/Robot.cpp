@@ -164,20 +164,16 @@ void Robot::notifyFireConfirmed(unsigned long currentMillis) {
     transitionTo(AutonomousState::EXTINGUISHING_FIRE, currentMillis);
 }
 
-void Robot::notifyFireSearchTimedOut() {
+void Robot::notifyFireSearchTimedOut(unsigned long currentMillis) {
     if (_state.autonomousState != AutonomousState::SEARCHING_FIRE) {
         return;
     }
 
-    Serial.println("FIRE SEARCH TIMEOUT: preparing reverse return");
-    _state.returningHome = true;
+    Serial.println("FIRE SEARCH TIMEOUT: returning home (reverse)");
     _state.fireDetected = false;
-    _state.targetX = navigation::GridMap::Home.x;
-    _state.targetY = navigation::GridMap::Home.y;
-    _state.hasTarget = true;
-    _state.routeReady = false;
-    prepareReverseReturnRoute();
-    transitionTo(AutonomousState::RETURNING_HOME, _stateStartedAt);
+    if (!planReverseReturnHome(currentMillis)) {
+        enterError(_state.lastError);
+    }
 }
 
 void Robot::notifyExtinguishingComplete() {
@@ -299,13 +295,14 @@ void Robot::handleAvoidingObstacle(unsigned long currentMillis) {
     _navigation.gridMap().debugPrintGrid(_state.x, _state.y, _state.targetX, _state.targetY, _state.hasTarget);
 
     if (_state.returningHome) {
-        if (!calculateRouteTo(navigation::GridMap::Home.x, navigation::GridMap::Home.y)) {
-            enterError(_state.lastError);
+        prepareReverseReturnRoute();
+        if (!_state.routeReady) {
+            enterError(_state.lastError[0] != '\0' ? _state.lastError
+                                                   : "Reverse return blocked after obstacle");
             return;
         }
 
-        // Novo BFS e avanco celula a celula; nao usar marcha a re no caminho replanejado.
-        _state.returningHome = false;
+        Serial.println("RETURN HOME: resuming reverse path after obstacle");
         transitionTo(AutonomousState::RETURNING_HOME, currentMillis);
     } else {
         transitionTo(AutonomousState::CALCULATING_ROUTE, currentMillis);
@@ -325,15 +322,12 @@ void Robot::handleExtinguishingFire(unsigned long currentMillis) {
         return;
     }
 
-    _state.returningHome = true;
     _state.fireDetected = false;
-    _state.targetX = navigation::GridMap::Home.x;
-    _state.targetY = navigation::GridMap::Home.y;
-    _state.hasTarget = true;
-    _state.routeReady = false;
     _extinguishingComplete = false;
-    prepareReverseReturnRoute();
-    transitionTo(AutonomousState::RETURNING_HOME, currentMillis);
+
+    if (!planReverseReturnHome(currentMillis)) {
+        enterError(_state.lastError);
+    }
 }
 
 void Robot::handleReturningHome(unsigned long currentMillis) {
@@ -351,12 +345,10 @@ void Robot::handleReturningHome(unsigned long currentMillis) {
     }
 
     if (!_state.routeReady) {
-        if (calculateRouteTo(navigation::GridMap::Home.x, navigation::GridMap::Home.y)) {
-            _state.returningHome = false;
-            return;
+        prepareReverseReturnRoute();
+        if (!_state.routeReady) {
+            enterError(_state.lastError[0] != '\0' ? _state.lastError : "Reverse return route is not ready");
         }
-
-        enterError(_state.lastError[0] != '\0' ? _state.lastError : "Return route is not ready");
         return;
     }
 
@@ -373,6 +365,23 @@ void Robot::enterError(const char* message) {
     Serial.print("ERROR DETAIL: ");
     Serial.println(_state.lastError);
     transitionTo(AutonomousState::ERROR, _stateStartedAt);
+}
+
+bool Robot::planReverseReturnHome(unsigned long currentMillis) {
+    _state.returningHome = true;
+    _state.targetX = navigation::GridMap::Home.x;
+    _state.targetY = navigation::GridMap::Home.y;
+    _state.hasTarget = true;
+    _state.routeReady = false;
+
+    prepareReverseReturnRoute();
+    if (!_state.routeReady) {
+        return false;
+    }
+
+    Serial.println("RETURN HOME: reverse along outgoing path (no replan)");
+    transitionTo(AutonomousState::RETURNING_HOME, currentMillis);
+    return true;
 }
 
 bool Robot::calculateRouteTo(uint8_t x, uint8_t y) {

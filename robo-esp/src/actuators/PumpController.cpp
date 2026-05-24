@@ -11,8 +11,14 @@ PumpController::PumpController(int relayPin)
     : _relayPin(relayPin) {}
 
 void PumpController::begin() {
+    // Garante pino em estado seguro (relay off) imediatamente ao configurar como output.
+    // Ordem: OUTPUT primeiro, depois escreve o nível seguro para minimizar glitch.
     pinMode(_relayPin, OUTPUT);
-    turnOff();
+    digitalWrite(_relayPin, _relayActiveHigh ? LOW : HIGH); // nível seguro = relay desligado
+    _isOn = false;
+    _timedRunActive = false;
+    _timedRunStartedAt = 0;
+    _timedRunDuration  = 0;
 }
 
 void PumpController::update(unsigned long currentMillis) {

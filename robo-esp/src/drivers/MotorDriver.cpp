@@ -72,6 +72,24 @@ MotorDriver::Direction MotorDriver::direction() const {
     return _direction;
 }
 
+void MotorDriver::driveWithCorrection(uint8_t speed, int8_t correction) {
+    int16_t left  = static_cast<int16_t>(speed) - correction;
+    int16_t right = static_cast<int16_t>(speed) + correction;
+    left  = left  < 0 ? 0 : (left  > 255 ? 255 : left);
+    right = right < 0 ? 0 : (right > 255 ? 255 : right);
+    setMotorPower(left, right);
+}
+
+void MotorDriver::driveBackwardWithCorrection(uint8_t speed, int8_t correction) {
+    // Ao recuar com motor esquerdo mais forte, o robô deriva para CCW (+yaw).
+    // Correction > 0 → reduz motor esquerdo, aumenta direito → corrige CCW.
+    int16_t left  = -(static_cast<int16_t>(speed) - correction);
+    int16_t right = -(static_cast<int16_t>(speed) + correction);
+    left  = left  < -255 ? -255 : (left  > 0 ? 0 : left);
+    right = right < -255 ? -255 : (right > 0 ? 0 : right);
+    setMotorPower(left, right);
+}
+
 void MotorDriver::applyState() {
     int16_t left = 0;
     int16_t right = 0;

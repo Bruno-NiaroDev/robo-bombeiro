@@ -24,6 +24,8 @@ struct TelemetryPayload {
     uint8_t x = 0;
     uint8_t y = 0;
     uint8_t heading = 2;
+    bool imuReady = false;
+    float imuYaw = 0.0f;
     const char* state = "IDLE";
     uint8_t pathSize = 0;
     uint8_t targetX = 0;
@@ -31,6 +33,7 @@ struct TelemetryPayload {
     bool obstacleDetected = false;
     bool fireDetected = false;
     bool pumpOn = false;
+    uint16_t flameRaw = 0;   ///< Leitura ADC bruta do sensor de chama (0–4095). Para calibração.
     const char* lastError = "";
 };
 
