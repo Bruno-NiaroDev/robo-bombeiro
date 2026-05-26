@@ -250,8 +250,16 @@ void AutonomousRobotSystem::processSensorEvents(unsigned long currentMillis) {
             _movement.stop();
             _movementCommandActive = false;
             _obstacleConfirmationActive = false;
-            // Sweep mantido: continua varrendo durante extinção (desligado só ao fim da bomba)
             _fireSearchActive = false;
+
+            if (!_pumpCommandActive && !_pump.isOn()) {
+                _fireScanner.enableSweep(false);                    // para servo H apontado para o fogo
+                _fireScanner.enableDetection(false, currentMillis); // evita re-disparo
+                _pumpCommandActive = _pump.runFor(ExtinguishingDurationMillis, currentMillis);
+                Serial.printf("PUMP ON: fogo em %u graus, bomba por %lums\n",
+                              _fireScanner.fireAngle(), ExtinguishingDurationMillis);
+            }
+
             _robot.notifyFireConfirmed(currentMillis);
         } else if (_fireSearchActive &&
                    currentMillis - _fireSearchStartedAt >= FireSearchDurationMillis) {
@@ -354,12 +362,13 @@ void AutonomousRobotSystem::startExtinguishing(unsigned long currentMillis) {
         return;
     }
 
-    // Desativa detecção para não re-disparar, mas mantém varredura horizontal ativa:
-    // o servo continua varrendo enquanto a bomba joga água por ExtinguishingDurationMillis.
+    // Fallback: bomba não foi ativada em processSensorEvents (não deve ocorrer normalmente).
+    // Servo H já parado pela detecção; apenas garante que a bomba será ligada.
+    _fireScanner.enableSweep(false);
     _fireScanner.enableDetection(false, currentMillis);
     _fireSearchActive = false;
     _pumpCommandActive = _pump.runFor(ExtinguishingDurationMillis, currentMillis);
-    Serial.printf("EXTINGUISHING: bomba ligada por %lums, varredura mantida\n",
+    Serial.printf("EXTINGUISHING (fallback): bomba ligada por %lums\n",
                   ExtinguishingDurationMillis);
 }
 

@@ -25,7 +25,7 @@ struct NetworkConfig {
 struct NavigationConfig {
     // ── Temporização de movimento ────────────────────────────────────────────
     uint16_t cellTravelDurationMs    = 950;   // duração de cada célula (ms)
-    uint16_t turn90DurationMs        = 600;   // timeout de segurança da curva (ms)
+    uint16_t turn90DurationMs        = 700;   // timeout de segurança da curva (ms)
     uint16_t movementPauseDurationMs = 280;   // pausa entre giro e avanço (ms)
     uint16_t updateIntervalMs        = 50;    // intervalo de update (ms)
 

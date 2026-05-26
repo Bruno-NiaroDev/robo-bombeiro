@@ -27,8 +27,9 @@ namespace motor {
 
 /// Flame sensor pin.
 namespace sensors {
-    /// Fire sensor analog/digital input.
-    constexpr int FLAME = 34;
+    /// Fire sensor digital input (D0 do modulo E27-004).
+    /// GPIO32 suporta INPUT_PULLUP. GPIO34 nao pode ser usado (input-only sem pull-up interno).
+    constexpr int FLAME = 32;
 
     namespace ultrasonic {
         /// Ultrasonic sensor trigger output.

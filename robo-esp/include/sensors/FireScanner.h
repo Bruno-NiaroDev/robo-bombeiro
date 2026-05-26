@@ -80,8 +80,13 @@ public:
     /// Padrão: false (modo analógico).
     void setDigitalMode(bool useDigital);
 
-    /// Tempo de confirmação para evitar falsos positivos (padrão: 80 ms).
-    void setConfirmationDuration(unsigned long millis);
+    /// Tempo de latch após o último sample positivo (padrão: 200 ms).
+    /// Mantém a detecção ativa enquanto o servo varre além do ângulo da chama.
+    void setLatchDuration(unsigned long millis);
+
+    /// Tempo de settling após ativar detecção — leituras ignoradas nesse período (padrão: 500 ms).
+    /// Evita falso positivo por ruído dos servos ou IR ambiente na posição inicial.
+    void setSettlingDuration(unsigned long millis);
 
     /// Pulso mínimo e máximo do servo horizontal em µs.
     void setServoPulseRange(uint16_t minPulseMicros, uint16_t maxPulseMicros);
@@ -140,8 +145,12 @@ private:
     uint16_t     _fireThreshold           = 500;  // ADC 12 bits — usado só no modo analógico
     bool         _activeWhenLow           = false; // false = ADC alto indica chama (modo analógico)
     bool         _digitalMode             = true;  // true = lê D0 digitalmente (LOW = chama)
-    unsigned long _confirmationDurationMillis = 20;
-    unsigned long _candidateStartedAt     = 0;
+    unsigned long _latchDurationMillis        = 200; // mantém detecção após último sample positivo
+    uint8_t       _consecutivePositiveCount   = 0;   // contagem de samples positivos consecutivos
+    unsigned long _lastPositiveSampleMillis   = 0;   // referência do latch
+    unsigned long _detectionEnabledAt         = 0;   // quando enableDetection(true) foi chamado
+    unsigned long _settlingDurationMillis     = 300; // ignora leituras nos primeiros 300ms após ativar
+    bool          _baselineEstablished        = false; // viu HIGH pelo menos uma vez pós-settling
 
     // ── Estado de detecção ───────────────────────────────────────────────────
     uint16_t      _lastRaw          = 0;   // última leitura ADC — exposta via rawValue()

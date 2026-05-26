@@ -46,9 +46,11 @@ void FireScanner::begin() {
     _fireDetected         = false;
     _hasNewData           = false;
     _sweepIncreasing      = false;           // primeira varredura: 180° → minAngle
-    _lastStepMillis       = 0;
-    _candidateStartedAt   = 0;
-    _fireDirection        = FireDirection::None;
+    _lastStepMillis             = 0;
+    _consecutivePositiveCount   = 0;
+    _lastPositiveSampleMillis   = 0;
+    _baselineEstablished        = false;
+    _fireDirection              = FireDirection::None;
     _detectionEnabled     = false;
     _sweepEnabled         = false;
 
@@ -130,9 +132,30 @@ void FireScanner::updateFireReading(unsigned long currentMillis) {
 
     if (!_detectionEnabled) {
         if (_fireDetected) _hasNewData = true;
-        _fireDetected       = false;
-        _fireDirection      = FireDirection::None;
-        _candidateStartedAt = 0;
+        _fireDetected             = false;
+        _fireDirection            = FireDirection::None;
+        _consecutivePositiveCount = 0;
+        _lastPositiveSampleMillis = 0;
+        return;
+    }
+
+    // Settling: ignora leituras logo após ativar detecção (ruído de servos / posição inicial).
+    if (currentMillis - _detectionEnabledAt < _settlingDurationMillis) return;
+
+    // Baseline: exige ver D0=HIGH pelo menos uma vez antes de aceitar LOW como fogo.
+    // Garante que o sensor está capaz de ler HIGH (sem chama).
+    // Se D0 nunca for HIGH, o potenciômetro está sensível demais — ajuste-o.
+    if (!_baselineEstablished) {
+        if (!sampleFire) {
+            _baselineEstablished = true;
+            Serial.println("FIRE SCANNER: baseline HIGH confirmado, deteccao armada");
+        } else {
+            static unsigned long lastWarnMs = 0;
+            if (currentMillis - lastWarnMs >= 1000) {
+                lastWarnMs = currentMillis;
+                Serial.println("FIRE SCANNER: aguardando D0=HIGH (ajuste o potenciometro se persistir)");
+            }
+        }
         return;
     }
 
@@ -154,17 +177,24 @@ void FireScanner::updateFireReading(unsigned long currentMillis) {
         }
     }
 
-    // Confirmação por tempo — filtra ruído elétrico e reflexos
+    // Detecção em duas fases:
+    //   Fase 1 — contagem: exige >= 2 samples positivos CONSECUTIVOS antes de confirmar.
+    //            Qualquer sample negativo zera a contagem (enquanto não confirmado).
+    //            Filtra spikes únicos de ruído ou GPIO flutuante.
+    //   Fase 2 — latch: após confirmado, mantém detecção por _latchDurationMillis após
+    //            o último sample positivo. Cobre gaps enquanto servo varre além da chama.
     if (sampleFire) {
-        if (_candidateStartedAt == 0) {
-            _candidateStartedAt = currentMillis;
-        }
+        _consecutivePositiveCount++;
+        _lastPositiveSampleMillis = currentMillis;
     } else {
-        _candidateStartedAt = 0;
+        _consecutivePositiveCount = 0; // sempre zera na leitura negativa
     }
 
-    const bool detected = (_candidateStartedAt != 0) &&
-                          (currentMillis - _candidateStartedAt >= _confirmationDurationMillis);
+    const bool freshlyConfirmed = (_consecutivePositiveCount >= 2);
+    const bool latchStillActive = _fireDetected &&
+                                  (_lastPositiveSampleMillis != 0) &&
+                                  (currentMillis - _lastPositiveSampleMillis <= _latchDurationMillis);
+    const bool detected = freshlyConfirmed || latchStillActive;
 
     const FireDirection prevDirection = _fireDirection;
 
@@ -192,7 +222,11 @@ void FireScanner::enableDetection(bool enabled, unsigned long currentMillis) {
     }
 
     _detectionEnabled = enabled;
-    Serial.printf("FIRE DETECTION: %s\n", enabled ? "ENABLED" : "DISABLED");
+    if (enabled) {
+        _detectionEnabledAt = currentMillis;
+    }
+    Serial.printf("FIRE DETECTION: %s (settling=%lums)\n",
+                  enabled ? "ENABLED" : "DISABLED", _settlingDurationMillis);
 }
 
 void FireScanner::enableSweep(bool enabled) {
@@ -218,11 +252,12 @@ void FireScanner::enableSweep(bool enabled) {
 void FireScanner::center() {
     _currentAngle         = _maxAngle;       // repouso em 180°
     _verticalCurrentAngle = _verticalRestAngle;
-    _fireAngle            = 0;
-    _fireDirection        = FireDirection::None;
-    _fireDetected         = false;
-    _candidateStartedAt   = 0;
-    _sweepIncreasing      = false;           // próxima varredura começa descendo de 180°
+    _fireAngle                  = 0;
+    _fireDirection              = FireDirection::None;
+    _fireDetected               = false;
+    _consecutivePositiveCount   = 0;
+    _lastPositiveSampleMillis   = 0;
+    _sweepIncreasing            = false;           // próxima varredura começa descendo de 180°
 
     writeServoAngle(_currentAngle);
     writeVerticalAngle(_verticalCurrentAngle);
@@ -292,8 +327,12 @@ void FireScanner::setDigitalMode(bool useDigital) {
     _digitalMode = useDigital;
 }
 
-void FireScanner::setConfirmationDuration(unsigned long ms) {
-    _confirmationDurationMillis = ms;
+void FireScanner::setLatchDuration(unsigned long ms) {
+    _latchDurationMillis = ms;
+}
+
+void FireScanner::setSettlingDuration(unsigned long ms) {
+    _settlingDurationMillis = ms;
 }
 
 void FireScanner::setServoPulseRange(uint16_t minPulseMicros, uint16_t maxPulseMicros) {
@@ -307,10 +346,12 @@ void FireScanner::setServoPulseRange(uint16_t minPulseMicros, uint16_t maxPulseM
 // ── Estado interno ────────────────────────────────────────────────────────────
 
 void FireScanner::resetDetection() {
-    _fireDetected       = false;
-    _hasNewData         = false;
-    _fireDirection      = FireDirection::None;
-    _candidateStartedAt = 0;
+    _fireDetected               = false;
+    _hasNewData                 = false;
+    _fireDirection              = FireDirection::None;
+    _consecutivePositiveCount   = 0;
+    _lastPositiveSampleMillis   = 0;
+    _baselineEstablished        = false;
 }
 
 // ── Controle dos servos ───────────────────────────────────────────────────────

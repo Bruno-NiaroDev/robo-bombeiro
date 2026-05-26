@@ -33,7 +33,7 @@ private:
     void sendTelemetry(unsigned long currentMillis);
     const char* stateName() const;
 
-    static const unsigned long ExtinguishingDurationMillis = 10000; // 10s jogando água
+    static const unsigned long ExtinguishingDurationMillis = 3000; // 2s jogando água
     static const unsigned long ObstacleConfirmationMillis = 5000;
     static const unsigned long FireSearchDurationMillis = 10000;
 

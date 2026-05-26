@@ -262,6 +262,12 @@ void Robot::handleCalculatingRoute(unsigned long currentMillis) {
         return;
     }
 
+    if (_state.x == _state.targetX && _state.y == _state.targetY) {
+        Serial.printf("ALREADY AT TARGET (%u,%u): skipping movement\n", _state.targetX, _state.targetY);
+        transitionTo(AutonomousState::SEARCHING_FIRE, currentMillis);
+        return;
+    }
+
     transitionTo(AutonomousState::MOVING, currentMillis);
 }
 
